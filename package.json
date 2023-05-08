@@ -1,0 +1,28 @@
+{
+  "name": "@renegade334/samp-query",
+  "version": "2.0.0",
+  "description": "Simple interface to the SA:MP query protocol",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.d.ts"
+  ],
+  "scripts": {
+    "build": "npx tsc",
+    "prepare": "npm run build"
+  },
+  "author": "Renegade334",
+  "repository": "github:Renegade334/samp-query",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "ip": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/ip": "^1.1.0",
+    "@types/node": "^20.1.0",
+    "typescript": "^5.0.4"
+  }
+}

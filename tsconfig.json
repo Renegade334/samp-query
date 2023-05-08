@@ -1,0 +1,15 @@
+{
+  "include": [
+    "src"
+  ],
+  "exclude": [],
+  "compilerOptions": {
+    "target": "esnext",
+    "module": "commonjs",
+    "declaration": true,
+    "outDir": "./",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true
+  }
+}
