@@ -1,10 +1,11 @@
 {
   "name": "@renegade334/samp-query",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Simple interface to the SA:MP query protocol",
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
+    "index.js",
     "index.d.ts"
   ],
   "scripts": {
@@ -22,7 +23,7 @@
   },
   "devDependencies": {
     "@types/ip": "^1.1.0",
-    "@types/node": "^20.1.0",
+    "@types/node": ">=16",
     "typescript": "^5.0.4"
   }
 }

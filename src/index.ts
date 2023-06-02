@@ -6,40 +6,63 @@ import IP = require('ip');
 import Timers = require('node:timers/promises');
 
 declare namespace SAMPQuery {
-	type Info = {
-		password: boolean,
-		players: number,
-		maxplayers: number,
-		servername: string,
-		gamemode: string,
-		language: string
+	interface Info {
+		password: boolean;
+		players: number;
+		maxplayers: number;
+		servername: string;
+		gamemode: string;
+		language: string;
 	}
-	type Rules = {
+	interface Rules {
 		[index: string]: string;
+	}
+	interface QueryOptions {
+		/** If greater than one, then queries will be retried on timeout, up to this total number of attempts. */
+		attempts?: number;
+		/** The timeout duration for each query attempt, in milliseconds. */
+		timeout?: number;
 	}
 }
 
 type KeyType<T, V> = keyof { [K in keyof T as T[K] extends V ? K : never]: never }
 
 class SAMPQuery {
-	#ip?: string;
+	defaults: Required<SAMPQuery.QueryOptions>;
 
-	constructor(readonly address: string, readonly port: number) {
+	static InvalidMessageError = class InvalidMessageError extends Error {
+		constructor(message: string, public response: Buffer) {
+			super(message);
+		}
+	}
+
+	static TimeoutError = class TimeoutError extends Error {
+		constructor(public timeout: number) {
+			super(`Query timed out after ${timeout}ms`);
+		}
+	}
+
+	constructor(readonly address: string, readonly port: number, defaultOptions: SAMPQuery.QueryOptions = {}) {
 		if (Number.isNaN(port) || port < 1 || port > 65535) {
 			throw new RangeError(`Expecting port to be number between 1 and 65535, received ${port}`);
 		}
+
+		this.defaults = {
+			attempts: defaultOptions.attempts ?? 1,
+			timeout: defaultOptions.timeout ?? 5_000,
+		};
 	}
 
 	#info(buffer: Buffer): SAMPQuery.Info {
 		if (buffer.toString('latin1', 10, 11) != 'i') {
-			throw new TypeError('Invalid opcode, not an info payload');
+			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not an info payload', buffer);
 		}
-		
-		const info: Partial<SAMPQuery.Info> = {};
 
-		info.password = Boolean(buffer.readInt8(11));
-		info.players = buffer.readInt16LE(12);
-		info.maxplayers = buffer.readInt16LE(14);
+		const info: Partial<SAMPQuery.Info> = {
+			password: !!buffer.readInt8(11),
+			players: buffer.readInt16LE(12),
+			maxplayers: buffer.readInt16LE(14)
+		};
 
 		let offset = 16;
 		const indices: KeyType<SAMPQuery.Info, string>[] = ['servername', 'gamemode', 'language'];
@@ -47,13 +70,13 @@ class SAMPQuery {
 			const length = buffer.readInt32LE(offset);
 			info[index] = buffer.toString('latin1', offset += 4, offset += length);
 		}
-		
+
 		return info as SAMPQuery.Info;
 	}
 
 	#rules(buffer: Buffer): SAMPQuery.Rules {
 		if (buffer.toString('latin1', 10, 11) != 'r') {
-			throw new TypeError('Invalid opcode, not a rules payload');
+			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not a rules payload', buffer);
 		}
 
 		const result: SAMPQuery.Rules = {};
@@ -62,54 +85,77 @@ class SAMPQuery {
 		let offset = 13;
 
 		for (let i = 0; i < count; i++) {
-			const nameLength = buffer.readUInt8(offset);
-			const name = buffer.toString('latin1', ++offset, offset += nameLength);
-			
-			const valueLength = buffer.readUInt8(offset);
-			const value = buffer.toString('latin1', ++offset, offset += valueLength);
-			
+			let length = buffer.readUInt8(offset);
+			const name = buffer.toString('latin1', ++offset, offset += length);
+
+			length = buffer.readUInt8(offset);
+			const value = buffer.toString('latin1', ++offset, offset += length);
+
 			result[name] = value;
 		}
 		
 		return result;
 	}
 
-	async #ping(buffer: Buffer, payload: Buffer): Promise<void> {
+	#ping(buffer: Buffer, payload: Buffer): void {
 		if (buffer.toString('latin1', 10, 11) != 'p') {
-			throw new TypeError('Invalid opcode, not a ping payload');
+			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not a ping payload', buffer);
 		}
 
 		if (payload.compare(buffer, 11)) {
-			throw new Error(`Returned payload ${buffer.toString('hex', 11)} did not match sent payload ${payload.toString('hex')}`);
+			throw new SAMPQuery.InvalidMessageError(`Returned payload ${buffer.toString('hex', 11)} did not match sent payload ${payload.toString('hex')}`, buffer);
 		}
 	}
 
-	async #query(opcode: string): Promise<Buffer> {
-		if (!this.#ip) {
-			this.#ip = (await DNS.promises.lookup(this.address, { family: 4 })).address;
-		}
-		
-		const payload = Buffer.from(`SAMP${"\0".repeat(6)}${opcode}`, 'latin1');
-		payload.writeUInt32BE(IP.toLong(this.#ip), 4);
-		payload.writeInt16LE(this.port, 8);
-		
-		const socket = Datagram.createSocket('udp4');
-		socket.send(payload, this.port, this.#ip, (error: Error | null) => error instanceof Error ? socket.emit('error', error) : socket.emit('sent'));
+	async #query(opcode: string, options: SAMPQuery.QueryOptions): Promise<Buffer> {
+		const { address } = await DNS.promises.lookup(this.address, { family: 4 });
 
-		const aborter = new AbortController;
-		
+		const errors: InstanceType<typeof SAMPQuery.TimeoutError>[] = [];
+		let attempts = options.attempts ?? this.defaults.attempts;
+
+		while (true) {
+			try {
+				return await this.#sendPayload(address, opcode, options);
+			}
+			catch (error) {
+				if (error instanceof SAMPQuery.TimeoutError) {
+					errors.push(error);
+					if (--attempts <= 0) {
+						if (errors.length > 1) {
+							throw new AggregateError(errors, `Query timed out after ${errors.length} attempts`);
+						}
+						else {
+							throw error;
+						}
+					}
+				}
+				else {
+					throw error;
+				}
+			}
+		}
+	}
+
+	async #sendPayload(address: string, opcode: string, options: SAMPQuery.QueryOptions): Promise<Buffer> {
+		const payload = Buffer.from(`SAMP${"\0".repeat(6)}${opcode}`, 'latin1');
+		payload.writeUInt32BE(IP.toLong(address), 4);
+		payload.writeInt16LE(this.port, 8);
+
+		const socket = Datagram.createSocket('udp4'), aborter = new AbortController;
+
 		try {
-			await Events.once(socket, 'sent');
-		
+			socket.send(payload, this.port, address);
+
 			const [ message ] = await Promise.race([
 				Events.once(socket, 'message', { signal: aborter.signal }),
-				Timers.setTimeout(5000, new Error('Query timed out after 5000ms'), { signal: aborter.signal }).then((error: Error) => Promise.reject(error))
+				Timers.setTimeout(options.timeout ?? this.defaults.timeout, Date.now(), { signal: aborter.signal })
+					.then(start => Promise.reject(new SAMPQuery.TimeoutError(Date.now() - start)))
 			]) as [ Buffer, Datagram.RemoteInfo ];
 
 			if (message.toString('latin1', 0, 4) !== 'SAMP') {
-				throw new TypeError('Invalid header, expected 53414d50');
+				throw new SAMPQuery.InvalidMessageError('Invalid header, expected 53414d50', message);
 			}
-			
+
 			return message;
 		}
 		finally {
@@ -118,17 +164,30 @@ class SAMPQuery {
 		}
 	}
 
-	async getInfo(): Promise<SAMPQuery.Info> {
-		return this.#query('i').then(this.#info);
+	/**
+	 * Requests info variables from the query interface.
+	 */
+	async getInfo(options: SAMPQuery.QueryOptions = {}): Promise<SAMPQuery.Info> {
+		return this.#query('i', options).then(this.#info);
 	}
 
-	async getRules(): Promise<SAMPQuery.Rules> {
-		return this.#query('r').then(this.#rules);
+	/**
+	 * Requests rule variables from the query interface.
+	 */
+	async getRules(options: SAMPQuery.QueryOptions = {}): Promise<SAMPQuery.Rules> {
+		return this.#query('r', options).then(this.#rules);
 	}
 
-	async ping(): Promise<void> {
-		const payload = Crypto.randomBytes(4);
-		return this.#query(`p${payload.toString('latin1')}`).then(data => this.#ping(data, payload));
+	/**
+	 * Sends a ping packet to the query interface.
+	 * The returned `Promise` resolves to the round-trip time in milliseconds.
+	 *
+	 * This function only ever makes one ping attempt, and ignores the `attempts` option.
+	 */
+	async ping(options: SAMPQuery.QueryOptions = {}): Promise<number> {
+		const payload = Crypto.randomBytes(4), start = Date.now();
+		await this.#query(`p${payload.toString('latin1')}`, { ...options, attempts: 1 }).then(data => this.#ping(data, payload));
+		return Date.now() - start;
 	}
 }
 
