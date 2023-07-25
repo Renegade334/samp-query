@@ -54,7 +54,7 @@ class SAMPQuery {
 	}
 
 	#info(buffer: Buffer): SAMPQuery.Info {
-		if (buffer.toString('latin1', 10, 11) != 'i') {
+		if (buffer.readUInt8(10) !== 0x69) { // 'i'
 			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not an info payload', buffer);
 		}
 
@@ -75,7 +75,7 @@ class SAMPQuery {
 	}
 
 	#rules(buffer: Buffer): SAMPQuery.Rules {
-		if (buffer.toString('latin1', 10, 11) != 'r') {
+		if (buffer.readUInt8(10) !== 0x72) { // 'r'
 			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not a rules payload', buffer);
 		}
 
@@ -98,7 +98,7 @@ class SAMPQuery {
 	}
 
 	#ping(buffer: Buffer, payload: Buffer): void {
-		if (buffer.toString('latin1', 10, 11) != 'p') {
+		if (buffer.readUInt8(10) !== 0x70) { // 'p'
 			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not a ping payload', buffer);
 		}
 
@@ -139,7 +139,7 @@ class SAMPQuery {
 	async #sendPayload(address: string, opcode: string, options: SAMPQuery.QueryOptions): Promise<Buffer> {
 		const payload = Buffer.from(`SAMP${"\0".repeat(6)}${opcode}`, 'latin1');
 		payload.writeUInt32BE(IP.toLong(address), 4);
-		payload.writeInt16LE(this.port, 8);
+		payload.writeUInt16LE(this.port, 8);
 
 		const socket = Datagram.createSocket('udp4'), aborter = new AbortController;
 
@@ -152,7 +152,7 @@ class SAMPQuery {
 					.then(start => Promise.reject(new SAMPQuery.TimeoutError(Date.now() - start)))
 			]) as [ Buffer, Datagram.RemoteInfo ];
 
-			if (message.toString('latin1', 0, 4) !== 'SAMP') {
+			if (message.readUInt32BE() !== 0x53414d50) { // 'SAMP'
 				throw new SAMPQuery.InvalidMessageError('Invalid header, expected 53414d50', message);
 			}
 
