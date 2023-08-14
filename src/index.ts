@@ -6,6 +6,14 @@ import IP = require('ip');
 import Timers = require('node:timers/promises');
 
 declare namespace SAMPQuery {
+	interface Client {
+		nick: string;
+		score: number;
+	}
+	interface DetailedClient extends Client {
+		id: number;
+		ping: number;
+	}
 	interface Info {
 		password: boolean;
 		players: number;
@@ -26,7 +34,7 @@ declare namespace SAMPQuery {
 }
 
 type KeyType<T, V> = keyof { [K in keyof T as T[K] extends V ? K : never]: never }
-type QueryCode = 'i' | `p${string}` | 'r'
+type QueryCode = 'c' | 'd' | 'i' | `p${string}` | 'r'
 type QueryResponse = { message: Buffer, time: number }
 
 class SAMPQuery {
@@ -165,6 +173,67 @@ class SAMPQuery {
 			const value = message.toString('latin1', ++offset, offset += length);
 
 			result[name] = value;
+		}
+
+		return result;
+	}
+
+	/**
+	 * Requests client list (nick, score) from the query interface.
+	 *
+	 * Throttled to 100 players.
+	 */
+	async getClientList(options: SAMPQuery.QueryOptions = {}): Promise<SAMPQuery.Client[]> {
+		const { message } = await this.#query('c', options);
+
+		if (message.readUInt8(10) !== 0x63) { // 'c'
+			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not a client list payload', message);
+		}
+
+		const result: SAMPQuery.Client[] = [];
+
+		const count = message.readInt16LE(11);
+		let offset = 13;
+
+		for (let i = 0; i < count; i++) {
+			const length = message.readUInt8(offset);
+			const nick = message.toString('latin1', ++offset, offset += length);
+
+			const score = message.readInt32LE(offset); offset += 4;
+
+			result.push({nick, score});
+		}
+
+		return result;
+	}
+
+	/**
+	 * Requests detailed client list (id, nick, score, ping) from the query interface.
+	 *
+	 * Throttled to 100 players.
+	 */
+	async getDetailedClientList(options: SAMPQuery.QueryOptions = {}): Promise<SAMPQuery.DetailedClient[]> {
+		const { message } = await this.#query('d', options);
+
+		if (message.readUInt8(10) !== 0x64) { // 'd'
+			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not a detailed client list payload', message);
+		}
+
+		const result: SAMPQuery.DetailedClient[] = [];
+
+		const count = message.readInt16LE(11);
+		let offset = 13;
+
+		for (let i = 0; i < count; i++) {
+			const id = message.readUInt8(offset++);
+
+			const length = message.readUInt8(offset);
+			const nick = message.toString('latin1', ++offset, offset += length);
+
+			const score = message.readInt32LE(offset); offset += 4;
+			const ping = message.readInt32LE(offset); offset += 4;
+
+			result.push({id, nick, score, ping});
 		}
 
 		return result;
