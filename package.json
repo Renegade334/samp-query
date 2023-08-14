@@ -1,7 +1,7 @@
 {
   "name": "@renegade334/samp-query",
-  "version": "2.1.1",
-  "description": "Simple interface to the SA:MP query protocol",
+  "version": "2.2.0",
+  "description": "Node.JS interface to the SA:MP query protocol",
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
@@ -14,7 +14,7 @@
   },
   "author": "Renegade334",
   "repository": "github:Renegade334/samp-query",
-  "license": "UNLICENSED",
+  "license": "MPL-2.0",
   "engines": {
     "node": ">=16"
   },
