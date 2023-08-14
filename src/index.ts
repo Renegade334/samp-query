@@ -26,6 +26,8 @@ declare namespace SAMPQuery {
 }
 
 type KeyType<T, V> = keyof { [K in keyof T as T[K] extends V ? K : never]: never }
+type QueryCode = 'i' | `p${string}` | 'r'
+type QueryResponse = { message: Buffer, time: number }
 
 class SAMPQuery {
 	defaults: Required<SAMPQuery.QueryOptions>;
@@ -53,61 +55,7 @@ class SAMPQuery {
 		};
 	}
 
-	#info(buffer: Buffer): SAMPQuery.Info {
-		if (buffer.readUInt8(10) !== 0x69) { // 'i'
-			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not an info payload', buffer);
-		}
-
-		const info: Partial<SAMPQuery.Info> = {
-			password: !!buffer.readInt8(11),
-			players: buffer.readInt16LE(12),
-			maxplayers: buffer.readInt16LE(14)
-		};
-
-		let offset = 16;
-		const indices: KeyType<SAMPQuery.Info, string>[] = ['servername', 'gamemode', 'language'];
-		for (const index of indices) {
-			const length = buffer.readInt32LE(offset);
-			info[index] = buffer.toString('latin1', offset += 4, offset += length);
-		}
-
-		return info as SAMPQuery.Info;
-	}
-
-	#rules(buffer: Buffer): SAMPQuery.Rules {
-		if (buffer.readUInt8(10) !== 0x72) { // 'r'
-			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not a rules payload', buffer);
-		}
-
-		const result: SAMPQuery.Rules = {};
-
-		const count = buffer.readInt16LE(11);
-		let offset = 13;
-
-		for (let i = 0; i < count; i++) {
-			let length = buffer.readUInt8(offset);
-			const name = buffer.toString('latin1', ++offset, offset += length);
-
-			length = buffer.readUInt8(offset);
-			const value = buffer.toString('latin1', ++offset, offset += length);
-
-			result[name] = value;
-		}
-		
-		return result;
-	}
-
-	#ping(buffer: Buffer, payload: Buffer): void {
-		if (buffer.readUInt8(10) !== 0x70) { // 'p'
-			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not a ping payload', buffer);
-		}
-
-		if (payload.compare(buffer, 11)) {
-			throw new SAMPQuery.InvalidMessageError(`Returned payload ${buffer.toString('hex', 11)} did not match sent payload ${payload.toString('hex')}`, buffer);
-		}
-	}
-
-	async #query(opcode: string, options: SAMPQuery.QueryOptions): Promise<Buffer> {
+	async #query(opcode: QueryCode, options: SAMPQuery.QueryOptions): Promise<QueryResponse> {
 		const { address } = await DNS.promises.lookup(this.address, { family: 4 });
 
 		const errors: InstanceType<typeof SAMPQuery.TimeoutError>[] = [];
@@ -136,7 +84,7 @@ class SAMPQuery {
 		}
 	}
 
-	async #sendPayload(address: string, opcode: string, options: SAMPQuery.QueryOptions): Promise<Buffer> {
+	async #sendPayload(address: string, opcode: QueryCode, options: SAMPQuery.QueryOptions): Promise<QueryResponse> {
 		const payload = Buffer.from(`SAMP${"\0".repeat(6)}${opcode}`, 'latin1');
 		payload.writeUInt32BE(IP.toLong(address), 4);
 		payload.writeUInt16LE(this.port, 8);
@@ -144,6 +92,8 @@ class SAMPQuery {
 		const socket = Datagram.createSocket('udp4'), aborter = new AbortController;
 
 		try {
+			let time = -Date.now();
+
 			socket.send(payload, this.port, address);
 
 			const [ message ] = await Promise.race([
@@ -152,11 +102,13 @@ class SAMPQuery {
 					.then(start => Promise.reject(new SAMPQuery.TimeoutError(Date.now() - start)))
 			]) as [ Buffer, Datagram.RemoteInfo ];
 
+			time += Date.now();
+
 			if (message.readUInt32BE() !== 0x53414d50) { // 'SAMP'
 				throw new SAMPQuery.InvalidMessageError('Invalid header, expected 53414d50', message);
 			}
 
-			return message;
+			return { message, time };
 		}
 		finally {
 			aborter.abort();
@@ -168,14 +120,54 @@ class SAMPQuery {
 	 * Requests info variables from the query interface.
 	 */
 	async getInfo(options: SAMPQuery.QueryOptions = {}): Promise<SAMPQuery.Info> {
-		return this.#query('i', options).then(this.#info);
+		const { message } = await this.#query('i', options);
+
+		if (message.readUInt8(10) !== 0x69) { // 'i'
+			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not an info payload', message);
+		}
+
+		const info: Partial<SAMPQuery.Info> = {
+			password: !!message.readInt8(11),
+			players: message.readInt16LE(12),
+			maxplayers: message.readInt16LE(14)
+		};
+
+		let offset = 16;
+		const indices: KeyType<SAMPQuery.Info, string>[] = ['servername', 'gamemode', 'language'];
+		for (const index of indices) {
+			const length = message.readInt32LE(offset);
+			info[index] = message.toString('latin1', offset += 4, offset += length);
+		}
+
+		return info as SAMPQuery.Info;
 	}
 
 	/**
 	 * Requests rule variables from the query interface.
 	 */
 	async getRules(options: SAMPQuery.QueryOptions = {}): Promise<SAMPQuery.Rules> {
-		return this.#query('r', options).then(this.#rules);
+		const { message } = await this.#query('r', options);
+
+		if (message.readUInt8(10) !== 0x72) { // 'r'
+			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not a rules payload', message);
+		}
+
+		const result: SAMPQuery.Rules = {};
+
+		const count = message.readInt16LE(11);
+		let offset = 13;
+
+		for (let i = 0; i < count; i++) {
+			let length = message.readUInt8(offset);
+			const name = message.toString('latin1', ++offset, offset += length);
+
+			length = message.readUInt8(offset);
+			const value = message.toString('latin1', ++offset, offset += length);
+
+			result[name] = value;
+		}
+
+		return result;
 	}
 
 	/**
@@ -185,9 +177,19 @@ class SAMPQuery {
 	 * This function only ever makes one ping attempt, and ignores the `attempts` option.
 	 */
 	async ping(options: SAMPQuery.QueryOptions = {}): Promise<number> {
-		const payload = Crypto.randomBytes(4), start = Date.now();
-		await this.#query(`p${payload.toString('latin1')}`, { ...options, attempts: 1 }).then(data => this.#ping(data, payload));
-		return Date.now() - start;
+		const payload = Crypto.randomBytes(4);
+
+		const { message, time } = await this.#query(`p${payload.toString('latin1')}`, { ...options, attempts: 1 });
+
+		if (message.readUInt8(10) !== 0x70) { // 'p'
+			throw new SAMPQuery.InvalidMessageError('Invalid opcode, not a ping payload', message);
+		}
+
+		if (payload.compare(message, 11)) {
+			throw new SAMPQuery.InvalidMessageError(`Returned payload ${message.toString('hex', 11)} did not match sent payload ${payload.toString('hex')}`, message);
+		}
+
+		return time;
 	}
 }
 
