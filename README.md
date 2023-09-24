@@ -6,21 +6,25 @@ A Node.JS class for interrogating the [San Andreas: Multiplayer](https://www.sa-
 $ npm install github:Renegade334/samp-query
 ```
 
-### Importing
-#### CommonJS
+### Usage
 ```js
 const SAMPQuery = require('@renegade334/samp-query');
-```
-#### ESModule
-```js
-import SAMPQuery from '@renegade334/samp-query';
+
+const query = new SAMPQuery('my.server', 7777);
+
+try {
+  const { servername, gamemode } = await query.getInfo({ timeout: 2000 });
+  console.log(servername, gamemode);
+} catch (e) {
+  console.error(e);
+}
 ```
 
 ### API
 #### Class methods
 ```ts
 class SAMPQuery {
-  new(address: string, port: number, defaults?: SAMPQuery.QueryOptions);
+  constructor(address: string, port: number, defaults?: SAMPQuery.QueryOptions);
 
   /**
    * Requests info variables from the query interface.
