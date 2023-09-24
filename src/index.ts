@@ -41,12 +41,18 @@ class SAMPQuery {
 	defaults: Required<SAMPQuery.QueryOptions>;
 
 	static InvalidMessageError = class InvalidMessageError extends Error {
+		static {
+			this.prototype.name = 'InvalidMessageError';
+		}
 		constructor(message: string, public response: Buffer) {
 			super(message);
 		}
 	}
 
 	static TimeoutError = class TimeoutError extends Error {
+		static {
+			this.prototype.name = 'TimeoutError';
+		}
 		constructor(public timeout: number) {
 			super(`Query timed out after ${timeout}ms`);
 		}
