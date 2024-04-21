@@ -1,6 +1,6 @@
 {
   "name": "@renegade334/samp-query",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "description": "Node.JS interface to the SA:MP query protocol",
   "main": "index.js",
   "types": "index.d.ts",

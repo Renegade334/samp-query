@@ -53,8 +53,8 @@ class SAMPQuery {
 		static {
 			this.prototype.name = 'TimeoutError';
 		}
-		constructor(public timeout: number) {
-			super(`Query timed out after ${timeout}ms`);
+		constructor(message: string) {
+			super(message);
 		}
 	}
 
@@ -72,8 +72,11 @@ class SAMPQuery {
 	async #query(opcode: QueryCode, options: SAMPQuery.QueryOptions): Promise<QueryResponse> {
 		const { address } = await DNS.promises.lookup(this.address, { family: 4 });
 
-		const errors: InstanceType<typeof SAMPQuery.TimeoutError>[] = [];
-		let attempts = options.attempts ?? this.defaults.attempts;
+		const attempts = Math.trunc(options.attempts ?? this.defaults.attempts);
+		if (attempts < 1) {
+			throw new RangeError(`Expecting attempts to be a positive integer, received ${attempts}`);
+		}
+		let remaining = attempts;
 
 		while (true) {
 			try {
@@ -81,10 +84,9 @@ class SAMPQuery {
 			}
 			catch (error) {
 				if (error instanceof SAMPQuery.TimeoutError) {
-					errors.push(error);
-					if (--attempts <= 0) {
-						if (errors.length > 1) {
-							throw new AggregateError(errors, `Query timed out after ${errors.length} attempts`);
+					if (--remaining <= 0) {
+						if (attempts > 1) {
+							throw new SAMPQuery.TimeoutError(`Query timed out after ${attempts} attempts`);
 						}
 						else {
 							throw error;
@@ -113,7 +115,7 @@ class SAMPQuery {
 			const [ message ] = await Promise.race([
 				Events.once(socket, 'message', { signal: aborter.signal }),
 				Timers.setTimeout(options.timeout ?? this.defaults.timeout, Date.now(), { signal: aborter.signal })
-					.then(start => Promise.reject(new SAMPQuery.TimeoutError(Date.now() - start)))
+					.then(start => Promise.reject(new SAMPQuery.TimeoutError(`Query timed out after ${Date.now() - start}ms`)))
 			]) as [ Buffer, Datagram.RemoteInfo ];
 
 			time += Date.now();
