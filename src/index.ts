@@ -35,7 +35,10 @@ declare namespace SAMPQuery {
 
 type KeyType<T, V> = keyof { [K in keyof T as T[K] extends V ? K : never]: never }
 type QueryCode = 'c' | 'd' | 'i' | `p${string}` | 'r'
-type QueryResponse = { message: Buffer, time: number }
+interface QueryResponse {
+	message: Buffer;
+	time: number;
+}
 
 class SAMPQuery {
 	defaults: Required<SAMPQuery.QueryOptions>;
@@ -113,10 +116,10 @@ class SAMPQuery {
 			socket.send(payload, this.port, address);
 
 			const [ message ] = await Promise.race([
-				Events.once(socket, 'message', { signal: aborter.signal }),
+				Events.once(socket, 'message', { signal: aborter.signal }) as Promise<[ msg: Buffer, rinfo: Datagram.RemoteInfo ]>,
 				Timers.setTimeout(options.timeout ?? this.defaults.timeout, Date.now(), { signal: aborter.signal })
 					.then(start => Promise.reject(new SAMPQuery.TimeoutError(`Query timed out after ${Date.now() - start}ms`)))
-			]) as [ Buffer, Datagram.RemoteInfo ];
+			]);
 
 			time += Date.now();
 
@@ -149,7 +152,7 @@ class SAMPQuery {
 		};
 
 		let offset = 16;
-		const indices: KeyType<SAMPQuery.Info, string>[] = ['servername', 'gamemode', 'language'];
+		const indices: KeyType<SAMPQuery.Info, string>[] = [ 'servername', 'gamemode', 'language' ];
 		for (const index of indices) {
 			const length = message.readInt32LE(offset);
 			info[index] = message.toString('latin1', offset += 4, offset += length);
@@ -209,7 +212,7 @@ class SAMPQuery {
 
 			const score = message.readInt32LE(offset); offset += 4;
 
-			result.push({nick, score});
+			result.push({ nick, score });
 		}
 
 		return result;
@@ -241,7 +244,7 @@ class SAMPQuery {
 			const score = message.readInt32LE(offset); offset += 4;
 			const ping = message.readInt32LE(offset); offset += 4;
 
-			result.push({id, nick, score, ping});
+			result.push({ id, nick, score, ping });
 		}
 
 		return result;
