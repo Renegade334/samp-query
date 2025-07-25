@@ -2,7 +2,6 @@ import Crypto = require('node:crypto');
 import Datagram = require('node:dgram');
 import DNS = require('node:dns');
 import Events = require('node:events');
-import IP = require('ip');
 import Timers = require('node:timers/promises');
 
 declare namespace SAMPQuery {
@@ -33,8 +32,7 @@ declare namespace SAMPQuery {
 	}
 }
 
-type KeyType<T, V> = keyof { [K in keyof T as T[K] extends V ? K : never]: never }
-type QueryCode = 'c' | 'd' | 'i' | `p${string}` | 'r'
+type QueryCode = 'c' | 'd' | 'i' | `p${string}` | 'r';
 interface QueryResponse {
 	message: Buffer;
 	time: number;
@@ -42,24 +40,6 @@ interface QueryResponse {
 
 class SAMPQuery {
 	defaults: Required<SAMPQuery.QueryOptions>;
-
-	static InvalidMessageError = class InvalidMessageError extends Error {
-		static {
-			this.prototype.name = 'InvalidMessageError';
-		}
-		constructor(message: string, public response: Buffer) {
-			super(message);
-		}
-	}
-
-	static TimeoutError = class TimeoutError extends Error {
-		static {
-			this.prototype.name = 'TimeoutError';
-		}
-		constructor(message: string) {
-			super(message);
-		}
-	}
 
 	constructor(readonly address: string, readonly port: number, defaultOptions: SAMPQuery.QueryOptions = {}) {
 		if (Number.isNaN(port) || port < 1 || port > 65535) {
@@ -70,6 +50,10 @@ class SAMPQuery {
 			attempts: defaultOptions.attempts ?? 1,
 			timeout: defaultOptions.timeout ?? 5_000,
 		};
+	}
+
+	#aton(address: string): number {
+		return address.split('.').reduce((a, o) => (a << 8) | Number(o), 0) >>> 0;
 	}
 
 	async #query(opcode: QueryCode, options: SAMPQuery.QueryOptions): Promise<QueryResponse> {
@@ -105,7 +89,7 @@ class SAMPQuery {
 
 	async #sendPayload(address: string, opcode: QueryCode, options: SAMPQuery.QueryOptions): Promise<QueryResponse> {
 		const payload = Buffer.from(`SAMP${"\0".repeat(6)}${opcode}`, 'latin1');
-		payload.writeUInt32BE(IP.toLong(address), 4);
+		payload.writeUInt32BE(this.#aton(address), 4);
 		payload.writeUInt16LE(this.port, 8);
 
 		const socket = Datagram.createSocket('udp4'), aborter = new AbortController;
@@ -152,8 +136,7 @@ class SAMPQuery {
 		};
 
 		let offset = 16;
-		const indices: KeyType<SAMPQuery.Info, string>[] = [ 'servername', 'gamemode', 'language' ];
-		for (const index of indices) {
+		for (const index of [ 'servername', 'gamemode', 'language' ] as const) {
 			const length = message.readInt32LE(offset);
 			info[index] = message.toString('latin1', offset += 4, offset += length);
 		}
@@ -270,6 +253,26 @@ class SAMPQuery {
 		}
 
 		return time;
+	}
+}
+
+namespace SAMPQuery {
+	export class InvalidMessageError extends Error {
+		static {
+			this.prototype.name = 'InvalidMessageError';
+		}
+		constructor(message: string, public response: Buffer) {
+			super(message);
+		}
+	}
+
+	export class TimeoutError extends Error {
+		static {
+			this.prototype.name = 'TimeoutError';
+		}
+		constructor(message: string) {
+			super(message);
+		}
 	}
 }
 
